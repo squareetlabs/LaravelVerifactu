@@ -17,7 +17,7 @@ class AeatClient
     private Client $client;
     private bool $production;
 
-    public function __construct(string $certPath, ?string $certPassword = null, bool $production = true)
+    public function __construct(string $certPath, ?string $certPassword = null, bool $production = false)
     {
         $this->certPath = $certPath;
         $this->certPassword = $certPassword;
@@ -70,9 +70,11 @@ class AeatClient
         foreach ($invoice->breakdowns as $breakdown) {
             $desgloses[] = [
                 'TipoImpositivo' => $breakdown->tax_rate,
-                'BaseImponible' => $breakdown->base_amount,
                 'CuotaRepercutida' => $breakdown->tax_amount,
-                // Otros campos según XSD
+                'BaseImponibleOimporteNoSujeto' => $breakdown->base_amount,
+                'Impuesto' => '01',
+                'ClaveRegimen' => '01',
+                'CalificacionOperacion' => 'S1'
             ];
         }
 
@@ -80,7 +82,7 @@ class AeatClient
         $hashData = [
             'issuer_tax_id' => $issuerVat,
             'invoice_number' => $invoice->number,
-            'issue_date' => $invoice->date->format('Y-m-d'),
+            'issue_date' => $invoice->date->format('d-m-Y'),
             'invoice_type' => $invoice->type->value ?? (string)$invoice->type,
             'total_tax' => (string)$invoice->tax,
             'total_amount' => (string)$invoice->total,
@@ -121,7 +123,7 @@ class AeatClient
                 'IndicadorMultiplesOT' => 'N',
             ],
             'FechaHoraHusoGenRegistro' => now()->format('c'),
-            'TipoHuella' => 'H1',
+            'TipoHuella' => '01',
             'Huella' => $hashResult['hash'],
         ];
 
@@ -176,4 +178,4 @@ class AeatClient
     }
 
     // Métodos adicionales para anulación, consulta, etc. pueden añadirse aquí
-} 
+}
