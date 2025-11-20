@@ -163,9 +163,18 @@ class AeatClient
         }
 
         // 9. Configurar SoapClient y enviar
-        $wsdl = $this->production
-            ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP?wsdl'
-            : 'https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl';
+        // Determinar WSDL: local (si está configurado) o remoto
+        $useLocalWsdl = config('verifactu.aeat.use_local_wsdl', false);
+        $wsdlLocal = storage_path('wsdl/SistemaFacturacion.wsdl');
+        
+        if ($useLocalWsdl && file_exists($wsdlLocal)) {
+            $wsdl = $wsdlLocal;
+        } else {
+            $wsdl = $this->production
+                ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP?wsdl'
+                : 'https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl';
+        }
+        
         $location = $this->production
             ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
             : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
