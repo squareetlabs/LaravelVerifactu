@@ -27,19 +27,14 @@ class AeatClient
     ) {
         $this->certPath = $certPath;
         $this->certPassword = $certPassword;
+        $this->production = $production;
         
         // Inyectar servicio de firma XAdES (si no se proporciona, resolverlo del container)
         $this->xadesService = $xadesService ?? app(XadesSignatureInterface::class);
         
-        // 🔒 FORZADO A ENTORNO DE PRUEBAS
-        // ⚠️ PRODUCCIÓN DESHABILITADA: El parámetro $production se ignora temporalmente
-        // Solo se usará el entorno de pruebas de AEAT hasta nueva indicación
-        $this->production = false; // FORZADO: Siempre pruebas
-        
-        // URLs AEAT:
-        // PRODUCCIÓN (COMENTADO): 'https://www1.aeat.es'
-        // PRUEBAS (ACTIVO): 'https://prewww1.aeat.es'
-        $this->baseUri = 'https://prewww1.aeat.es'; // SOLO PRUEBAS
+        $this->baseUri = $production
+            ? 'https://www1.aeat.es'
+            : 'https://prewww1.aeat.es';
         
         $this->client = new Client([
             'cert' => ($certPassword === null) ? $certPath : [$certPath, $certPassword],
@@ -168,16 +163,12 @@ class AeatClient
         }
 
         // 9. Configurar SoapClient y enviar
-        // 🔒 FORZADO A ENTORNO DE PRUEBAS AEAT
-        // URLs de producción comentadas hasta nueva indicación
-        
-        // PRODUCCIÓN (COMENTADO):
-        // $wsdl = 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP?wsdl';
-        // $location = 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
-        
-        // PRUEBAS (ACTIVO):
-        $wsdl = 'https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl';
-        $location = 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
+        $wsdl = $this->production
+            ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP?wsdl'
+            : 'https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl';
+        $location = $this->production
+            ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
+            : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
         $options = [
             'local_cert' => $this->certPath,
             'passphrase' => $this->certPassword,
