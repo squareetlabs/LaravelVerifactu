@@ -153,7 +153,7 @@ class AeatClient
                         'FechaExpedicionFactura' => $invoice->previous_invoice_date->format('d-m-Y'),
                         'Huella' => $invoice->previous_invoice_hash,
                     ]
-                ],
+            ],
             'SistemaInformatico' => [
                 'NombreRazon' => $issuerName,
                 'NIF' => $issuerVat,
@@ -179,7 +179,7 @@ class AeatClient
 
         // 8. Convert array to XML
         $xml = $this->buildAeatXml($body);
-        
+
         // 9. Sign XML with XAdES-EPES (required by AEAT)
         if (!$this->xadesService) {
             return [
@@ -351,7 +351,7 @@ class AeatClient
             }
         }
     }
-
+    
     /**
      * Validate AEAT response and extract CSV.
      * 

@@ -27,7 +27,7 @@ return [
         
         // Versión del sistema informático
         'version' => env('VERIFACTU_SISTEMA_VERSION', '1.0'),
-        
+    
         // Número de instalación (único por cada instalación del cliente)
         // IMPORTANTE: Cada cliente debe tener su propio número
         'numero_instalacion' => env('VERIFACTU_NUMERO_INSTALACION', '001'),
