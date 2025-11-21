@@ -30,7 +30,7 @@ class Invoice extends Model
                 'invoice_type' => $invoice->type instanceof \BackedEnum ? $invoice->type->value : (string)$invoice->type,
                 'total_tax' => (string)$invoice->tax,
                 'total_amount' => (string)$invoice->total,
-                'previous_hash' => $invoice->previous_hash ?? '', // Si implementas encadenamiento
+                'previous_hash' => $invoice->previous_hash ?? '',
                 'generated_at' => now()->format('c'),
             ];
             $hashResult = \Squareetlabs\VeriFactu\Helpers\HashHelper::generateInvoiceHash($hashData);
@@ -60,7 +60,7 @@ class Invoice extends Model
         'issued_at',
         'cancelled_at',
         'hash',
-        'csv',  // Código Seguro de Verificación de AEAT
+        'csv',
     ];
 
     protected $casts = [

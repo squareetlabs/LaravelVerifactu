@@ -25,7 +25,6 @@ class Recipient extends Model
         'name',
         'tax_id',
         'country',
-        // Otros campos relevantes
     ];
 
     public function invoice()

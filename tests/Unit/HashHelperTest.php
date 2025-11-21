@@ -23,7 +23,7 @@ class HashHelperTest extends TestCase
         $this->assertArrayHasKey('hash', $result);
         $this->assertArrayHasKey('inputString', $result);
         $this->assertEquals(64, strlen($result['hash']));
-        $this->assertStringContainsString('issuer_tax_id=A12345678', $result['inputString']);
+        $this->assertStringContainsString('IDEmisorFactura=A12345678', $result['inputString']);
     }
 
     public function testGenerateInvoiceHashThrowsOnMissingField(): void

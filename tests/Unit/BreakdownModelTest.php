@@ -6,9 +6,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Squareetlabs\VeriFactu\Models\Breakdown;
 use Squareetlabs\VeriFactu\Models\Invoice;
 use Tests\TestCase;
-use Squareetlabs\VeriFactu\Models\TaxType;
-use Squareetlabs\VeriFactu\Models\RegimeType;
-use Squareetlabs\VeriFactu\Models\OperationType;
+use Squareetlabs\VeriFactu\Enums\TaxType;
+use Squareetlabs\VeriFactu\Enums\RegimeType;
+use Squareetlabs\VeriFactu\Enums\OperationType;
 
 class BreakdownModelTest extends TestCase
 {

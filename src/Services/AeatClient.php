@@ -46,31 +46,29 @@ class AeatClient
     }
 
     /**
-     * Send invoice registration to AEAT (dummy implementation, extend as needed)
+     * Send invoice registration to AEAT.
      *
      * @param Invoice $invoice
      * @return array
      */
     public function sendInvoice(Invoice $invoice): array
     {
-        // 1. Obtener datos del certificado (Representante) desde config
+        // 1. Certificate owner data (Representative) from config
         $certificateOwner = config('verifactu.issuer');
         $certificateName = $certificateOwner['name'] ?? '';
         $certificateVat = $certificateOwner['vat'] ?? '';
 
-        // 2. ObligadoEmision: Datos del cliente (quien emite la factura)
-        // El issuer_name e issuer_tax_id de la factura corresponden al cliente final
+        // 2. Issuer data (ObligadoEmision - actual invoice issuer)
         $issuerName = $invoice->issuer_name;
         $issuerVat = $invoice->issuer_tax_id;
 
-        // 3. Construir Cabecera con Representante (modelo SaaS/Asesoría)
+        // 3. Build header with Representative (SaaS model)
         $cabecera = [
             'ObligadoEmision' => [
-                'NombreRazon' => $issuerName,  // Cliente (quien emite)
-                'NIF' => $issuerVat,            // NIF del cliente
+                'NombreRazon' => $issuerName,
+                'NIF' => $issuerVat,
             ],
-            // Representante: Tu empresa (quien presenta en nombre del cliente)
-            // Solo incluir si el NIF del cliente es diferente al del certificado
+            // Representative: Only include if different from issuer
             ...($issuerVat !== $certificateVat ? [
                 'Representante' => [
                     'NombreRazon' => $certificateName,
@@ -79,31 +77,29 @@ class AeatClient
             ] : []),
         ];
 
-        // 3. Mapear destinatarios
+        // 4. Map recipients
         $destinatarios = [];
         foreach ($invoice->recipients as $recipient) {
             $destinatarios[] = [
                 'NombreRazon' => $recipient->name,
                 'NIF' => $recipient->tax_id,
-                // 'IDOtro' => ... // Si aplica
             ];
         }
 
-        // 4. Mapear desgloses (Breakdown) - Estructura correcta según XSD
-        // DesgloseType requiere elementos DetalleDesglose (hasta 12)
+        // 5. Map tax breakdowns
         $detallesDesglose = [];
         foreach ($invoice->breakdowns as $breakdown) {
             $detallesDesglose[] = [
-                'Impuesto' => '01',  // 01=IVA, 02=IPSI, 03=IGIC, 05=Otros
-                'ClaveRegimen' => '01',  // Clave régimen IVA
-                'CalificacionOperacion' => 'S1',  // S1: Sujeta sin inversión
+                'Impuesto' => '01',
+                'ClaveRegimen' => '01',
+                'CalificacionOperacion' => 'S1',
                 'TipoImpositivo' => $breakdown->tax_rate,
                 'BaseImponibleOimporteNoSujeto' => $breakdown->base_amount,
                 'CuotaRepercutida' => $breakdown->tax_amount,
             ];
         }
 
-        // 5. Generar huella (hash) usando HashHelper
+        // 6. Generate invoice hash
         $hashData = [
             'issuer_tax_id' => $issuerVat,
             'invoice_number' => $invoice->number,
@@ -116,22 +112,20 @@ class AeatClient
         ];
         $hashResult = \Squareetlabs\VeriFactu\Helpers\HashHelper::generateInvoiceHash($hashData);
 
-        // 6. Construir RegistroAlta
+        // 7. Build RegistroAlta
         $registroAlta = [
             'IDVersion' => '1.0',
             'IDFactura' => [
                 'IDEmisorFactura' => $issuerVat,
                 'NumSerieFactura' => $invoice->number,
-                'FechaExpedicionFactura' => $invoice->date->format('d-m-Y'),  // Formato dd-mm-yyyy según XSD
+                'FechaExpedicionFactura' => $invoice->date->format('d-m-Y'),
             ],
             'NombreRazonEmisor' => $issuerName,
             'TipoFactura' => $invoice->type->value ?? (string)$invoice->type,
             'DescripcionOperacion' => 'Invoice issued',
-            // Destinatarios: Opcional (minOccurs=0 según XSD)
-            // Solo incluir si hay destinatarios válidos
             ...(!empty($destinatarios) ? ['Destinatarios' => ['IDDestinatario' => $destinatarios]] : []),
             'Desglose' => [
-                'DetalleDesglose' => $detallesDesglose,  // Estructura correcta según XSD
+                'DetalleDesglose' => $detallesDesglose,
             ],
             'CuotaTotal' => (string)$invoice->tax,
             'ImporteTotal' => (string)$invoice->total,
@@ -157,31 +151,16 @@ class AeatClient
         $body = [
             'Cabecera' => $cabecera,
             'RegistroFactura' => [
-                [ 'sf:RegistroAlta' => $registroAlta ] // Prefijo sf: para RegistroAlta
+                [ 'sf:RegistroAlta' => $registroAlta ]
             ],
         ];
 
-        // 7. Convertir array a XML con DOMDocument (mejor control de namespaces)
+        // 8. Convert array to XML
         $xml = $this->buildAeatXml($body);
-
-        // Guardar XML para debug
-        $debugPath = storage_path('logs/debug_xml_' . time() . '.xml');
-        file_put_contents($debugPath, $xml);
         
-        // Log XML ANTES de firmar (debug)
-        Log::info('[AEAT] XML antes de firmar guardado en: ' . basename($debugPath), [
-            'length' => strlen($xml),
-        ]);
-        
-        // 8. 🔐 FIRMAR XML CON XADES-EPES (CRÍTICO para AEAT)
+        // 9. Sign XML with XAdES-EPES (required by AEAT)
         try {
             $xmlFirmado = $this->xadesService->signXml($xml);
-            
-            // Log XML DESPUÉS de firmar (debug)
-            Log::info('[AEAT] XML después de firmar', [
-                'xml' => substr($xmlFirmado, 0, 500), // Primeros 500 caracteres
-                'length' => strlen($xmlFirmado),
-            ]);
         } catch (\Exception $e) {
             Log::error('[AEAT] Error al firmar XML', [
                 'error' => $e->getMessage(),
@@ -193,8 +172,7 @@ class AeatClient
             ];
         }
 
-        // 9. Configurar SoapClient y enviar
-        // Determinar WSDL: local (si está configurado) o remoto
+        // 10. Configure SOAP client and send request
         $useLocalWsdl = config('verifactu.aeat.use_local_wsdl', false);
         $wsdlLocal = storage_path('wsdl/SistemaFacturacion.wsdl');
         
@@ -210,59 +188,19 @@ class AeatClient
             ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
             : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
         
-        // Configurar opciones SSL con certificado de cliente
-        $sslOptions = [
-            'verify_peer' => true,
-            'verify_peer_name' => true,
-            'allow_self_signed' => false,
-            'local_cert' => $this->certPath,
-            'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT,
-        ];
-        
-        // Solo añadir passphrase si existe
-        if (!empty($this->certPassword)) {
-            $sslOptions['passphrase'] = $this->certPassword;
-        }
-        
-        $options = [
-            'trace' => true,
-            'exceptions' => true,
-            'cache_wsdl' => 0,
-            'soap_version' => SOAP_1_1,
-            'stream_context' => stream_context_create([
-                'ssl' => $sslOptions,
-            ]),
-        ];
         try {
-            // Log configuración para debug
-            Log::info('[AEAT] Intentando conectar', [
-                'wsdl' => basename($wsdl),
-                'location' => $location,
-                'cert_path' => $this->certPath,
-                'cert_exists' => file_exists($this->certPath),
-                'has_password' => !empty($this->certPassword),
-            ]);
-            
-            // Extraer el XML sin la declaración
+            // Extract XML without declaration
             $dom = new \DOMDocument();
             $dom->loadXML($xmlFirmado);
             $xmlBody = $dom->saveXML($dom->documentElement);
             
-            // Construir el SOAP Envelope manualmente
-            $soapEnvelope = '<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-    <soap:Body>
-        ' . $xmlBody . '
-    </soap:Body>
-</soap:Envelope>';
+            // Build SOAP Envelope
+            $soapEnvelope = sprintf(
+                '<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>%s</soap:Body></soap:Envelope>',
+                $xmlBody
+            );
             
-            // Log para debug
-            Log::info('[AEAT] SOAP Envelope construido', [
-                'length' => strlen($soapEnvelope),
-                'preview' => substr($soapEnvelope, 0, 1000),
-            ]);
-            
-            // Enviar con CURL
+            // Send with CURL
             $ch = curl_init($location);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
@@ -285,18 +223,11 @@ class AeatClient
             curl_close($ch);
             
             if ($curlError) {
-                Log::error('[AEAT] Error CURL', ['error' => $curlError]);
                 return [
                     'status' => 'error',
                     'message' => 'CURL Error: ' . $curlError,
                 ];
             }
-            
-            Log::info('[AEAT] Respuesta recibida', [
-                'http_code' => $httpCode,
-                'response_length' => strlen($response),
-                'response_preview' => substr($response, 0, 500),
-            ]);
             
             if ($httpCode != 200) {
                 // Parsear error del SOAP Fault
@@ -314,12 +245,6 @@ class AeatClient
             $validationResult = $this->validateAeatResponse($response);
             
             if (!$validationResult['success']) {
-                // AEAT rechazó la factura (aunque HTTP 200)
-                Log::warning('[AEAT] Factura rechazada por AEAT', [
-                    'error' => $validationResult['message'],
-                    'codigo_error' => $validationResult['codigo'] ?? null,
-                ]);
-                
                 return [
                     'status' => 'error',
                     'message' => $validationResult['message'],
@@ -337,15 +262,6 @@ class AeatClient
                 'csv' => $validationResult['csv'] ?? null,
             ];
         } catch (\SoapFault $e) {
-            // Capturar más detalles del error
-            Log::error('[AEAT] Error SOAP', [
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'faultcode' => $e->faultcode ?? null,
-                'faultstring' => $e->faultstring ?? null,
-                'detail' => $e->detail ?? null,
-            ]);
-            
             return [
                 'status' => 'error',
                 'message' => $e->getMessage(),
@@ -358,7 +274,7 @@ class AeatClient
     }
 
     /**
-     * Construir XML específico para AEAT con estructura correcta de namespaces.
+     * Build AEAT-specific XML with correct namespace structure.
      *
      * @param array $data
      * @return string
@@ -371,22 +287,17 @@ class AeatClient
         $dom = new \DOMDocument('1.0', 'UTF-8');
         $dom->formatOutput = false;
         
-        // Elemento raíz con namespace sfLR
         $root = $dom->createElementNS($nsSuministroLR, 'sfLR:RegFactuSistemaFacturacion');
         $root->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:sf', $nsSuministroInfo);
         $dom->appendChild($root);
         
-        // Cabecera SIN prefijo (pertenece al namespace raíz sfLR)
-        // pero sus hijos deben usar el namespace sf: porque son del tipo sf:CabeceraType
         $cabecera = $dom->createElementNS($nsSuministroLR, 'Cabecera');
         $this->buildDomElement($dom, $cabecera, $data['Cabecera'], $nsSuministroInfo);
         $root->appendChild($cabecera);
         
-        // RegistroFactura SIN prefijo (pertenece al namespace raíz sfLR)
         foreach ($data['RegistroFactura'] as $registroData) {
             $registroFactura = $dom->createElementNS($nsSuministroLR, 'RegistroFactura');
             
-            // RegistroAlta con namespace sf: (es una referencia a elemento definido)
             if (isset($registroData['sf:RegistroAlta'])) {
                 $registroAlta = $dom->createElementNS($nsSuministroInfo, 'sf:RegistroAlta');
                 $this->buildDomElement($dom, $registroAlta, $registroData['sf:RegistroAlta'], $nsSuministroInfo);
@@ -400,18 +311,15 @@ class AeatClient
     }
     
     /**
-     * Construir elementos DOM recursivamente.
+     * Build DOM elements recursively.
      */
     private function buildDomElement(\DOMDocument $dom, \DOMElement $parent, array $data, ?string $namespace = null): void
     {
         foreach ($data as $key => $value) {
             if (is_array($value)) {
                 if (isset($value[0])) {
-                    // Array numérico
                     foreach ($value as $item) {
-                        $element = $namespace 
-                            ? $dom->createElementNS($namespace, $key)
-                            : $dom->createElement($key);
+                        $element = $namespace ? $dom->createElementNS($namespace, $key) : $dom->createElement($key);
                         if (is_array($item)) {
                             $this->buildDomElement($dom, $element, $item, $namespace);
                         } else {
@@ -420,15 +328,11 @@ class AeatClient
                         $parent->appendChild($element);
                     }
                 } else {
-                    // Array asociativo
-                    $element = $namespace 
-                        ? $dom->createElementNS($namespace, $key)
-                        : $dom->createElement($key);
+                    $element = $namespace ? $dom->createElementNS($namespace, $key) : $dom->createElement($key);
                     $this->buildDomElement($dom, $element, $value, $namespace);
                     $parent->appendChild($element);
                 }
             } else {
-                // Valor escalar
                 $element = $namespace 
                     ? $dom->createElementNS($namespace, $key, htmlspecialchars((string)$value))
                     : $dom->createElement($key, htmlspecialchars((string)$value));
@@ -436,81 +340,9 @@ class AeatClient
             }
         }
     }
-    
-    /**
-     * Convertir array PHP a XML string.
-     *
-     * @param array $data Datos a convertir
-     * @param \SimpleXMLElement|null $xmlData Elemento XML padre (recursión)
-     * @return string XML como string
-     */
-    private function arrayToXml(array $data, ?\SimpleXMLElement $xmlData = null, ?string $parentNs = null, bool $isRoot = true): string
-    {
-        if ($xmlData === null) {
-            // Namespaces correctos de AEAT
-            $nsSuministroLR = 'https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd';
-            $nsSuministroInfo = 'https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd';
-            
-            // Elemento raíz: RegFactuSistemaFacturacion del namespace SuministroLR
-            $xmlData = new \SimpleXMLElement(
-                '<?xml version="1.0" encoding="UTF-8"?>' .
-                '<sfLR:RegFactuSistemaFacturacion ' .
-                'xmlns:sfLR="' . $nsSuministroLR . '" ' .
-                'xmlns:sf="' . $nsSuministroInfo . '"/>',
-                0,
-                false,
-                $nsSuministroLR
-            );
-            
-            $parentNs = 'root'; // Marcar que estamos en la raíz
-        }
-
-        foreach ($data as $key => $value) {
-            // Detectar si la clave tiene prefijo de namespace explícito (ej: "sf:RegistroAlta")
-            $useNamespace = null;
-            $elementName = $key;
-            if (str_contains($key, ':')) {
-                [$prefix, $elementName] = explode(':', $key, 2);
-                if ($prefix === 'sf') {
-                    $useNamespace = 'https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd';
-                }
-            }
-            
-            if (is_array($value)) {
-                // Si es array numérico, crear múltiples elementos con el mismo nombre
-                if (isset($value[0])) {
-                    foreach ($value as $item) {
-                        $subnode = $useNamespace 
-                            ? $xmlData->addChild($elementName, null, $useNamespace)
-                            : $xmlData->addChild($elementName);
-                        if (is_array($item)) {
-                            $this->arrayToXml($item, $subnode, $elementName, false);
-                        } else {
-                            $subnode[0] = htmlspecialchars((string)$item);
-                        }
-                    }
-                } else {
-                    // Array asociativo: crear subelemento
-                    $subnode = $useNamespace 
-                        ? $xmlData->addChild($elementName, null, $useNamespace)
-                        : $xmlData->addChild($elementName);
-                    $this->arrayToXml($value, $subnode, $elementName, false);
-                }
-            } else {
-                // Valor escalar
-                if ($useNamespace) {
-                    $xmlData->addChild($elementName, htmlspecialchars((string)$value), $useNamespace);
-                } else {
-                    $xmlData->addChild($elementName, htmlspecialchars((string)$value));
-                }
-            }
-        }
-
-        return $xmlData->asXML();
-    }
 
     /**
-     * Validar respuesta de AEAT (verificar si fue realmente aceptada).
+     * Validate AEAT response and extract CSV.
      * 
      * @param string $soapResponse
      * @return array ['success' => bool, 'message' => string, 'codigo' => string|null, 'csv' => string|null]
@@ -521,7 +353,6 @@ class AeatClient
             $dom = new \DOMDocument();
             $dom->loadXML($soapResponse);
             
-            // 1. Verificar si hay SOAP Fault
             $faultString = $dom->getElementsByTagName('faultstring')->item(0);
             if ($faultString) {
                 return [
@@ -531,42 +362,36 @@ class AeatClient
                 ];
             }
             
-            // 2. Verificar EstadoEnvio
             $estadoEnvio = $dom->getElementsByTagName('EstadoEnvio')->item(0);
             if (!$estadoEnvio || $estadoEnvio->nodeValue !== 'Correcto') {
-                // Buscar mensaje de error
                 $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorEnvio')->item(0);
                 $codigoErrorEnvio = $dom->getElementsByTagName('CodigoErrorEnvio')->item(0);
                 
                 return [
                     'success' => false,
-                    'message' => $descripcionErrorEnvio ? $descripcionErrorEnvio->nodeValue : 'Error en el envío a AEAT',
+                    'message' => $descripcionErrorEnvio ? $descripcionErrorEnvio->nodeValue : 'AEAT submission error',
                     'codigo' => $codigoErrorEnvio ? $codigoErrorEnvio->nodeValue : null,
                 ];
             }
             
-            // 3. Verificar RespuestaLinea > EstadoRegistro
             $estadoRegistro = $dom->getElementsByTagName('EstadoRegistro')->item(0);
             if (!$estadoRegistro || $estadoRegistro->nodeValue !== 'Correcto') {
-                // Buscar mensaje de error en el registro
                 $descripcionError = $dom->getElementsByTagName('DescripcionError')->item(0);
                 $codigoError = $dom->getElementsByTagName('CodigoError')->item(0);
                 
                 return [
                     'success' => false,
-                    'message' => $descripcionError ? $descripcionError->nodeValue : 'Error al registrar la factura',
+                    'message' => $descripcionError ? $descripcionError->nodeValue : 'Invoice registration error',
                     'codigo' => $codigoError ? $codigoError->nodeValue : null,
                 ];
             }
             
-            // 4. Extraer CSV (código seguro de verificación)
             $csv = $dom->getElementsByTagName('CSV')->item(0);
             $csvValue = $csv ? $csv->nodeValue : null;
             
-            // ✅ TODO OK: AEAT aceptó la factura
             return [
                 'success' => true,
-                'message' => 'Factura aceptada por AEAT',
+                'message' => 'Invoice accepted by AEAT',
                 'codigo' => null,
                 'csv' => $csvValue,
             ];
@@ -574,14 +399,14 @@ class AeatClient
         } catch (\Exception $e) {
             return [
                 'success' => false,
-                'message' => 'Error al validar respuesta AEAT: ' . $e->getMessage(),
+                'message' => 'Error validating AEAT response: ' . $e->getMessage(),
                 'codigo' => null,
             ];
         }
     }
     
     /**
-     * Extraer mensaje de error de SOAP Fault.
+     * Extract SOAP Fault error message.
      */
     private function extractSoapFaultMessage(string $soapResponse): string
     {
@@ -589,21 +414,20 @@ class AeatClient
             $dom = new \DOMDocument();
             $dom->loadXML($soapResponse);
             $faultString = $dom->getElementsByTagName('faultstring')->item(0);
-            return $faultString ? $faultString->nodeValue : 'Error desconocido';
+            return $faultString ? $faultString->nodeValue : 'Unknown error';
         } catch (\Exception $e) {
-            return 'Error al parsear respuesta SOAP';
+            return 'Error parsing SOAP response';
         }
     }
     
     /**
-     * Parsear respuesta SOAP exitosa.
+     * Parse successful SOAP response.
      */
     private function parseSoapResponse(string $soapResponse): array
     {
         try {
             $dom = new \DOMDocument();
             $dom->loadXML($soapResponse);
-            // Extraer datos relevantes de la respuesta
             return [
                 'raw' => $soapResponse,
                 'parsed' => true,
@@ -612,6 +436,4 @@ class AeatClient
             return ['raw' => $soapResponse, 'parsed' => false];
         }
     }
-    
-    // Métodos adicionales para anulación, consulta, etc. pueden añadirse aquí
 }
