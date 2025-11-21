@@ -14,18 +14,15 @@ class AeatClient
     private string $certPath;
     private ?string $certPassword;
     private bool $production;
-    private $xadesService; // Accept any object with signXml method
 
     public function __construct(
         string $certPath,
         ?string $certPassword = null,
-        bool $production = false,
-        $xadesService = null
+        bool $production = false
     ) {
         $this->certPath = $certPath;
         $this->certPassword = $certPassword;
         $this->production = $production;
-        $this->xadesService = $xadesService;
     }
 
     /**
@@ -103,10 +100,8 @@ class AeatClient
                 'NumSerieFactura' => $invoice->number,
                 'FechaExpedicionFactura' => $invoice->date->format('d-m-Y'),
             ],
-            // RefExterna (opcional)
             ...($invoice->external_reference ? ['RefExterna' => $invoice->external_reference] : []),
             'NombreRazonEmisor' => $issuerName,
-            // Subsanacion (opcional)
             ...($invoice->is_subsanacion ? [
                 'Subsanacion' => 'S',
                 'RechazoPrevio' => 'S',
@@ -126,7 +121,6 @@ class AeatClient
                     }, $invoice->rectified_invoices)
                 ]
             ] : []),
-            // ImporteRectificacion (solo si aplica)
             ...($invoice->rectification_amount ? [
                 'ImporteRectificacion' => [
                     'BaseRectificada' => (string)($invoice->rectification_amount['base'] ?? 0),
@@ -134,7 +128,6 @@ class AeatClient
                     'ImporteRectificacion' => (string)($invoice->rectification_amount['total'] ?? 0),
                 ]
             ] : []),
-            // FechaOperacion (opcional)
             ...($invoice->operation_date ? ['FechaOperacion' => $invoice->operation_date->format('d-m-Y')] : []),
             'DescripcionOperacion' => $invoice->description ?? 'Operación de facturación',
             ...(!empty($destinatarios) ? ['Destinatarios' => ['IDDestinatario' => $destinatarios]] : []),
@@ -143,7 +136,7 @@ class AeatClient
             ],
             'CuotaTotal' => (string)$invoice->tax,
             'ImporteTotal' => (string)$invoice->total,
-            // Encadenamiento (DYNAMIC - first or chained)
+            // Encadenamiento: primera factura vs factura encadenada
             'Encadenamiento' => $invoice->is_first_invoice 
                 ? ['PrimerRegistro' => 'S']
                 : [
@@ -157,13 +150,11 @@ class AeatClient
             'SistemaInformatico' => [
                 'NombreRazon' => $issuerName,
                 'NIF' => $issuerVat,
-                'NombreSistemaInformatico' => config('verifactu.sistema_informatico.nombre', 'LaravelVerifactu'),
-                'IdSistemaInformatico' => config('verifactu.sistema_informatico.id', '01'),
-                'Version' => config('verifactu.sistema_informatico.version', '1.0'),
-                'NumeroInstalacion' => config('verifactu.sistema_informatico.numero_instalacion', '001'),
+                'NombreSistemaInformatico' => config('verifactu.sistema_informatico.nombre', 'OrbilaiVerifactu'),
+                'IdSistemaInformatico' => config('verifactu.sistema_informatico.id', 'OV'),
+                'NumeroInstalacion' => $invoice->numero_instalacion,
                 'TipoUsoPosibleSoloVerifactu' => config('verifactu.sistema_informatico.solo_verifactu', true) ? 'S' : 'N',
-                'TipoUsoPosibleMultiOT' => config('verifactu.sistema_informatico.multi_ot', false) ? 'S' : 'N',
-                'IndicadorMultiplesOT' => config('verifactu.sistema_informatico.indicador_multiples_ot', false) ? 'S' : 'N',
+                'TipoUsoPosibleMultiOT' => config('verifactu.sistema_informatico.multi_ot', true) ? 'S' : 'N',
             ],
             'FechaHoraHusoGenRegistro' => now()->format('c'),
             'TipoHuella' => '01',
@@ -180,35 +171,16 @@ class AeatClient
         // 8. Convert array to XML
         $xml = $this->buildAeatXml($body);
 
-        // 9. Sign XML with XAdES-EPES (required by AEAT)
-        if (!$this->xadesService) {
-            return [
-                'status' => 'error',
-                'message' => 'XAdES signature service is required. Please provide a signature service in the constructor.',
-            ];
-        }
-        
-        try {
-            $xmlFirmado = $this->xadesService->signXml($xml);
-        } catch (\Exception $e) {
-            return [
-                'status' => 'error',
-                'message' => 'XML signing error: ' . $e->getMessage(),
-            ];
-        }
-
-        // 10. Send SOAP request to AEAT
+        // Envío SOAP a AEAT
         $location = $this->production
             ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
             : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
         
         try {
-            // Extract XML without declaration
             $dom = new \DOMDocument();
-            $dom->loadXML($xmlFirmado);
+            $dom->loadXML($xml);
             $xmlBody = $dom->saveXML($dom->documentElement);
             
-            // Build SOAP Envelope
             $soapEnvelope = sprintf(
                 '<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>%s</soap:Body></soap:Envelope>',
                 $xmlBody

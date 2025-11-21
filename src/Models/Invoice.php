@@ -50,6 +50,7 @@ class Invoice extends Model
         'issuer_name',
         'issuer_tax_id',
         'issuer_country',
+        'numero_instalacion',
         'amount',
         'tax',
         'total',

@@ -26,6 +26,7 @@ class StoreInvoiceRequest extends FormRequest
             'issuer_name' => ['required', 'string', 'max:120'],
             'issuer_tax_id' => ['required', 'string', 'max:20'],
             'issuer_country' => ['nullable', 'string', 'size:2'],
+            'numero_instalacion' => ['required', 'string', 'max:100'],
             'amount' => ['required', 'numeric', 'min:0'],
             'tax' => ['required', 'numeric', 'min:0'],
             'total' => ['required', 'numeric', 'min:0'],

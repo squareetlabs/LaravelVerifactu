@@ -30,7 +30,29 @@
 - ✅ SQLite in-memory para tests rápidos
 - ✅ Factories para testing
 - ✅ Validación contra XSD oficiales AEAT
+- ✅ **Modo VERIFACTU online (sin firma XAdES requerida)**
 - ✅ Listo para producción
+
+---
+
+## ⚠️ Nota sobre Firma Electrónica XAdES-EPES
+
+**Este paquete NO incluye firma electrónica XAdES-EPES** porque está diseñado para el **modo VERIFACTU online**.
+
+Según la documentación oficial de AEAT (`EspecTecGenerFirmaElectRfact.txt`, página 4/15):
+
+> "La firma electrónica de los registros de facturación sólo será exigible para los sistemas no VERI*FACTU, al no estar incluidos en las excepciones de los sistemas de remisión de facturas verificables recogidas en el artículo 3 del Real Decreto 1007/2023."
+
+**En modo VERIFACTU:**
+- ✅ La autenticación se realiza mediante certificado AEAT en HTTPS
+- ✅ El envío es inmediato a AEAT (online)
+- ❌ **NO se requiere firma XAdES-EPES** en el XML
+
+**En modo NO VERIFACTU (offline):**
+- ⚠️ **SÍ se requiere firma XAdES-EPES** obligatoriamente
+- ⚠️ Este paquete NO soporta este modo
+
+Para más detalles, consulta `docs/DECISION_FIRMA_XADES.md`.
 
 ---
 
