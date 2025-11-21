@@ -4,18 +4,16 @@ declare(strict_types=1);
 
 namespace Squareetlabs\VeriFactu\Services;
 
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 use Squareetlabs\VeriFactu\Models\Invoice;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use OrbilaiConnect\Services\Internal\Squareetlabs_LaravelVerifactu\Contracts\XadesSignatureInterface;
 
 class AeatClient
 {
-    private string $baseUri;
     private string $certPath;
     private ?string $certPassword;
-    private Client $client;
     private bool $production;
     private ?XadesSignatureInterface $xadesService;
 
@@ -28,21 +26,7 @@ class AeatClient
         $this->certPath = $certPath;
         $this->certPassword = $certPassword;
         $this->production = $production;
-        
-        // Inyectar servicio de firma XAdES (si no se proporciona, resolverlo del container)
         $this->xadesService = $xadesService ?? app(XadesSignatureInterface::class);
-        
-        $this->baseUri = $production
-            ? 'https://www1.aeat.es'
-            : 'https://prewww1.aeat.es';
-        
-        $this->client = new Client([
-            'cert' => ($certPassword === null) ? $certPath : [$certPath, $certPassword],
-            'base_uri' => $this->baseUri,
-            'headers' => [
-                'User-Agent' => 'LaravelVerifactu/1.0',
-            ],
-        ]);
     }
 
     /**
@@ -162,28 +146,13 @@ class AeatClient
         try {
             $xmlFirmado = $this->xadesService->signXml($xml);
         } catch (\Exception $e) {
-            Log::error('[AEAT] Error al firmar XML', [
-                'error' => $e->getMessage(),
-                'invoice_number' => $invoice->number,
-            ]);
             return [
                 'status' => 'error',
-                'message' => 'Error al firmar XML: ' . $e->getMessage(),
+                'message' => 'XML signing error: ' . $e->getMessage(),
             ];
         }
 
-        // 10. Configure SOAP client and send request
-        $useLocalWsdl = config('verifactu.aeat.use_local_wsdl', false);
-        $wsdlLocal = storage_path('wsdl/SistemaFacturacion.wsdl');
-        
-        if ($useLocalWsdl && file_exists($wsdlLocal)) {
-            $wsdl = $wsdlLocal;
-        } else {
-            $wsdl = $this->production
-                ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP?wsdl'
-                : 'https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl';
-        }
-        
+        // 10. Send SOAP request to AEAT
         $location = $this->production
             ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
             : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
@@ -200,75 +169,72 @@ class AeatClient
                 $xmlBody
             );
             
-            // Send with CURL
-            $ch = curl_init($location);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $soapEnvelope,
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: text/xml; charset=utf-8',
-                    'SOAPAction: ""',
-                    'Content-Length: ' . strlen($soapEnvelope),
-                ],
-                CURLOPT_SSLCERT => $this->certPath,
-                CURLOPT_SSLCERTPASSWD => $this->certPassword,
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_SSL_VERIFYHOST => 2,
-            ]);
+            // Send with Laravel HTTP Client
+            $response = Http::withOptions([
+                'cert' => $this->certPassword 
+                    ? [$this->certPath, $this->certPassword]
+                    : $this->certPath,
+                'verify' => true,
+            ])
+            ->timeout(30)
+            ->retry(3, 100, throw: false)
+            ->withHeaders([
+                'Content-Type' => 'text/xml; charset=utf-8',
+                'SOAPAction' => '""',
+                'User-Agent' => 'LaravelVerifactu/1.0',
+            ])
+            ->withBody($soapEnvelope, 'text/xml')
+            ->post($location);
             
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-            
-            if ($curlError) {
-                return [
-                    'status' => 'error',
-                    'message' => 'CURL Error: ' . $curlError,
-                ];
-            }
-            
-            if ($httpCode != 200) {
-                // Parsear error del SOAP Fault
-                $errorMessage = $this->extractSoapFaultMessage($response);
+            // First check: HTTP transport level errors (4xx, 5xx)
+            if (!$response->successful()) {
+                $errorMessage = $this->extractSoapFaultMessage($response->body());
                 return [
                     'status' => 'error',
                     'message' => $errorMessage,
-                    'http_code' => $httpCode,
-                    'response' => $response,
+                    'http_code' => $response->status(),
+                    'response' => $response->body(),
                 ];
             }
             
-            // ✅ VALIDAR RESPUESTA DE AEAT (no solo HTTP 200)
-            // Verificar si contiene SOAP Fault o error de validación
-            $validationResult = $this->validateAeatResponse($response);
+            // Second check: AEAT business logic validation
+            // IMPORTANT: HTTP 200 doesn't mean AEAT accepted the invoice
+            // AEAT can return HTTP 200 with EstadoEnvio=Incorrecto or EstadoRegistro=Incorrecto
+            $validationResult = $this->validateAeatResponse($response->body());
             
             if (!$validationResult['success']) {
                 return [
                     'status' => 'error',
                     'message' => $validationResult['message'],
                     'codigo_error' => $validationResult['codigo'] ?? null,
-                    'response' => $response,
+                    'response' => $response->body(),
                 ];
             }
             
-            // ✅ ÉXITO REAL: AEAT aceptó la factura
+            // Success: AEAT accepted the invoice
             return [
                 'status' => 'success',
                 'request' => $soapEnvelope,
-                'response' => $response,
-                'aeat_response' => $this->parseSoapResponse($response),
+                'response' => $response->body(),
+                'aeat_response' => $this->parseSoapResponse($response->body()),
                 'csv' => $validationResult['csv'] ?? null,
             ];
-        } catch (\SoapFault $e) {
+            
+        } catch (ConnectionException $e) {
             return [
                 'status' => 'error',
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'faultcode' => $e->faultcode ?? null,
-                'request' => isset($client) ? $client->__getLastRequest() : null,
-                'response' => isset($client) ? $client->__getLastResponse() : null,
+                'message' => 'Connection error: ' . $e->getMessage(),
+            ];
+        } catch (RequestException $e) {
+            return [
+                'status' => 'error',
+                'message' => 'Request error: ' . $e->getMessage(),
+                'http_code' => $e->response?->status(),
+            ];
+        } catch (\Exception $e) {
+            return [
+                'status' => 'error',
+                'message' => 'Unexpected error: ' . $e->getMessage(),
             ];
         }
     }
@@ -344,6 +310,16 @@ class AeatClient
     /**
      * Validate AEAT response and extract CSV.
      * 
+     * This method performs business logic validation of AEAT's response.
+     * Even if HTTP status is 200, AEAT can reject the invoice at the business level.
+     * 
+     * Validation levels (in order):
+     * 1. SOAP Fault: Technical communication error
+     * 2. EstadoEnvio: Submission status (must be "Correcto")
+     * 3. EstadoRegistro: Invoice registration status (must be "Correcto")
+     * 
+     * Only if all three checks pass, the invoice is truly accepted and CSV is returned.
+     * 
      * @param string $soapResponse
      * @return array ['success' => bool, 'message' => string, 'codigo' => string|null, 'csv' => string|null]
      */
@@ -353,15 +329,19 @@ class AeatClient
             $dom = new \DOMDocument();
             $dom->loadXML($soapResponse);
             
+            // Level 1: Check for SOAP Fault (technical error)
             $faultString = $dom->getElementsByTagName('faultstring')->item(0);
             if ($faultString) {
                 return [
                     'success' => false,
-                    'message' => $faultString->nodeValue,
+                    'message' => 'SOAP Fault: ' . $faultString->nodeValue,
                     'codigo' => null,
+                    'csv' => null,
                 ];
             }
             
+            // Level 2: Check EstadoEnvio (submission status)
+            // CRITICAL: HTTP 200 doesn't guarantee EstadoEnvio="Correcto"
             $estadoEnvio = $dom->getElementsByTagName('EstadoEnvio')->item(0);
             if (!$estadoEnvio || $estadoEnvio->nodeValue !== 'Correcto') {
                 $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorEnvio')->item(0);
@@ -369,11 +349,16 @@ class AeatClient
                 
                 return [
                     'success' => false,
-                    'message' => $descripcionErrorEnvio ? $descripcionErrorEnvio->nodeValue : 'AEAT submission error',
+                    'message' => $descripcionErrorEnvio 
+                        ? 'AEAT submission error: ' . $descripcionErrorEnvio->nodeValue 
+                        : 'AEAT submission error (no description provided)',
                     'codigo' => $codigoErrorEnvio ? $codigoErrorEnvio->nodeValue : null,
+                    'csv' => null,
                 ];
             }
             
+            // Level 3: Check EstadoRegistro (invoice registration status)
+            // CRITICAL: Even with EstadoEnvio="Correcto", registration can fail
             $estadoRegistro = $dom->getElementsByTagName('EstadoRegistro')->item(0);
             if (!$estadoRegistro || $estadoRegistro->nodeValue !== 'Correcto') {
                 $descripcionError = $dom->getElementsByTagName('DescripcionError')->item(0);
@@ -381,13 +366,27 @@ class AeatClient
                 
                 return [
                     'success' => false,
-                    'message' => $descripcionError ? $descripcionError->nodeValue : 'Invoice registration error',
+                    'message' => $descripcionError 
+                        ? 'Invoice registration error: ' . $descripcionError->nodeValue 
+                        : 'Invoice registration error (no description provided)',
                     'codigo' => $codigoError ? $codigoError->nodeValue : null,
+                    'csv' => null,
                 ];
             }
             
+            // All validations passed: Extract CSV
             $csv = $dom->getElementsByTagName('CSV')->item(0);
             $csvValue = $csv ? $csv->nodeValue : null;
+            
+            // Final check: CSV should exist for successful submissions
+            if (!$csvValue) {
+                return [
+                    'success' => false,
+                    'message' => 'Invoice accepted but CSV not found in response',
+                    'codigo' => null,
+                    'csv' => null,
+                ];
+            }
             
             return [
                 'success' => true,
@@ -399,8 +398,9 @@ class AeatClient
         } catch (\Exception $e) {
             return [
                 'success' => false,
-                'message' => 'Error validating AEAT response: ' . $e->getMessage(),
+                'message' => 'Error parsing AEAT response: ' . $e->getMessage(),
                 'codigo' => null,
+                'csv' => null,
             ];
         }
     }
