@@ -18,7 +18,9 @@ return [
     'sistema_informatico' => [
         'nombre' => env('VERIFACTU_SISTEMA_NOMBRE', 'OrbilaiVerifactu'),
         'id' => env('VERIFACTU_SISTEMA_ID', 'OV'),
-        'solo_verifactu' => env('VERIFACTU_SOLO_VERIFACTU', true),
+        'version' => env('VERIFACTU_SISTEMA_VERSION', '1.0'),        
+        'solo_verifactu' => env('VERIFACTU_SOLO_VERIFACTU', false),
         'multi_ot' => env('VERIFACTU_MULTI_OT', true),
+        'indicador_multiples_ot' => env('VERIFACTU_INDICADOR_MULTIPLES_OT', false),
     ],
 ]; 

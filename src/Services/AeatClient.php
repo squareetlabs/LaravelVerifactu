@@ -152,9 +152,11 @@ class AeatClient
                 'NIF' => $issuerVat,
                 'NombreSistemaInformatico' => config('verifactu.sistema_informatico.nombre', 'OrbilaiVerifactu'),
                 'IdSistemaInformatico' => config('verifactu.sistema_informatico.id', 'OV'),
+                'Version' => config('verifactu.sistema_informatico.version', '1.0'),
                 'NumeroInstalacion' => $invoice->numero_instalacion,
                 'TipoUsoPosibleSoloVerifactu' => config('verifactu.sistema_informatico.solo_verifactu', true) ? 'S' : 'N',
                 'TipoUsoPosibleMultiOT' => config('verifactu.sistema_informatico.multi_ot', true) ? 'S' : 'N',
+                'IndicadorMultiplesOT' => config('verifactu.sistema_informatico.indicador_multiples_ot', false) ? 'S' : 'N',
             ],
             'FechaHoraHusoGenRegistro' => now()->format('c'),
             'TipoHuella' => '01',
@@ -219,7 +221,7 @@ class AeatClient
             // AEAT can return HTTP 200 with EstadoEnvio=Incorrecto or EstadoRegistro=Incorrecto
             $validationResult = $this->validateAeatResponse($response->body());
             
-            if (!$validationResult['success']) {
+            if (!$validationResult['success']) {                                
                 return [
                     'status' => 'error',
                     'message' => $validationResult['message'],
@@ -360,9 +362,15 @@ class AeatClient
             // Level 2: Check EstadoEnvio (submission status)
             // CRITICAL: HTTP 200 doesn't guarantee EstadoEnvio="Correcto"
             $estadoEnvio = $dom->getElementsByTagName('EstadoEnvio')->item(0);
-            if (!$estadoEnvio || $estadoEnvio->nodeValue !== 'Correcto') {
+            if (!$estadoEnvio || $estadoEnvio->nodeValue !== 'Correcto') {                
                 $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorEnvio')->item(0);
                 $codigoErrorEnvio = $dom->getElementsByTagName('CodigoErrorEnvio')->item(0);
+                
+                // Si no hay error global, intentar obtenerlo de RespuestaLinea (nivel factura)
+                if (!$descripcionErrorEnvio) {
+                    $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorRegistro')->item(0);
+                    $codigoErrorEnvio = $dom->getElementsByTagName('CodigoErrorRegistro')->item(0);
+                }
                 
                 return [
                     'success' => false,
@@ -378,8 +386,8 @@ class AeatClient
             // CRITICAL: Even with EstadoEnvio="Correcto", registration can fail
             $estadoRegistro = $dom->getElementsByTagName('EstadoRegistro')->item(0);
             if (!$estadoRegistro || $estadoRegistro->nodeValue !== 'Correcto') {
-                $descripcionError = $dom->getElementsByTagName('DescripcionError')->item(0);
-                $codigoError = $dom->getElementsByTagName('CodigoError')->item(0);
+                $descripcionError = $dom->getElementsByTagName('DescripcionErrorRegistro')->item(0);
+                $codigoError = $dom->getElementsByTagName('CodigoErrorRegistro')->item(0);
                 
                 return [
                     'success' => false,
