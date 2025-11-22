@@ -62,6 +62,11 @@ class Invoice extends Model
         'cancelled_at',
         'hash',
         'csv',
+        // Estado AEAT
+        'aeat_estado_registro',
+        'aeat_codigo_error',
+        'aeat_descripcion_error',
+        'has_aeat_warnings',
         // Encadenamiento
         'previous_invoice_number',
         'previous_invoice_date',
@@ -84,6 +89,8 @@ class Invoice extends Model
         'amount' => 'decimal:2',
         'tax' => 'decimal:2',
         'total' => 'decimal:2',
+        // Estado AEAT
+        'has_aeat_warnings' => 'boolean',
         // Encadenamiento
         'previous_invoice_date' => 'date',
         'is_first_invoice' => 'boolean',
@@ -104,5 +111,56 @@ class Invoice extends Model
     public function recipients()
     {
         return $this->hasMany(Recipient::class);
+    }
+
+    /**
+     * Scope para filtrar facturas con warnings de AEAT
+     */
+    public function scopeWithAeatWarnings($query)
+    {
+        return $query->where('has_aeat_warnings', true);
+    }
+
+    /**
+     * Scope para filtrar facturas aceptadas sin problemas
+     */
+    public function scopeAcceptedWithoutWarnings($query)
+    {
+        return $query->where('status', 'submitted')
+                     ->where('has_aeat_warnings', false);
+    }
+
+    /**
+     * Scope para filtrar por estado de registro AEAT
+     */
+    public function scopeByAeatEstado($query, string $estado)
+    {
+        return $query->where('aeat_estado_registro', $estado);
+    }
+
+    public function isAceptadaPorAeat(): bool
+    {
+        return $this->status === 'submitted' && !empty($this->csv);
+    }
+
+    public function tieneWarningsAeat(): bool
+    {
+        return $this->has_aeat_warnings && 
+               $this->aeat_estado_registro === 'AceptadoConErrores';
+    }
+
+    public function getMensajeAeat(): ?string
+    {
+        if (!$this->aeat_descripcion_error) {
+            return null;
+        }
+
+        $mensaje = $this->aeat_descripcion_error;
+        
+        if ($this->aeat_codigo_error) {
+            $mensaje = "[{$this->aeat_codigo_error}] {$mensaje}";
+        }
+
+        return $mensaje;
     }
 } 

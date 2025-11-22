@@ -324,18 +324,8 @@ class AeatClient
     /**
      * Validate AEAT response and extract CSV.
      * 
-     * This method performs business logic validation of AEAT's response.
-     * Even if HTTP status is 200, AEAT can reject the invoice at the business level.
-     * 
-     * Validation levels (in order):
-     * 1. SOAP Fault: Technical communication error
-     * 2. EstadoEnvio: Submission status (must be "Correcto")
-     * 3. EstadoRegistro: Invoice registration status (must be "Correcto")
-     * 
-     * Only if all three checks pass, the invoice is truly accepted and CSV is returned.
-     * 
      * @param string $soapResponse
-     * @return array ['success' => bool, 'message' => string, 'codigo' => string|null, 'csv' => string|null]
+     * @return array
      */
     private function validateAeatResponse(string $soapResponse): array
     {
@@ -343,7 +333,6 @@ class AeatClient
             $dom = new \DOMDocument();
             $dom->loadXML($soapResponse);
             
-            // Level 1: Check for SOAP Fault (technical error)
             $faultString = $dom->getElementsByTagName('faultstring')->item(0);
             if ($faultString) {
                 return [
@@ -354,14 +343,32 @@ class AeatClient
                 ];
             }
             
-            // Level 2: Check EstadoEnvio (submission status)
-            // CRITICAL: HTTP 200 doesn't guarantee EstadoEnvio="Correcto"
             $estadoEnvio = $dom->getElementsByTagName('EstadoEnvio')->item(0);
-            if (!$estadoEnvio || $estadoEnvio->nodeValue !== 'Correcto') {                
+            
+            if (!$estadoEnvio) {
+                return [
+                    'success' => false,
+                    'message' => 'EstadoEnvio not found in response',
+                    'codigo' => null,
+                    'csv' => null,
+                ];
+            }
+            
+            $estadoEnvioValue = $estadoEnvio->nodeValue;
+            
+            if (!in_array($estadoEnvioValue, ['Correcto', 'ParcialmenteCorrecto', 'Incorrecto'])) {
+                return [
+                    'success' => false,
+                    'message' => "Unknown AEAT estado_envio value: {$estadoEnvioValue}. Please update the system.",
+                    'codigo' => null,
+                    'csv' => null,
+                ];
+            }
+            
+            if ($estadoEnvioValue === 'Incorrecto') {                
                 $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorEnvio')->item(0);
                 $codigoErrorEnvio = $dom->getElementsByTagName('CodigoErrorEnvio')->item(0);
                 
-                // Si no hay error global, intentar obtenerlo de RespuestaLinea (nivel factura)
                 if (!$descripcionErrorEnvio) {
                     $descripcionErrorEnvio = $dom->getElementsByTagName('DescripcionErrorRegistro')->item(0);
                     $codigoErrorEnvio = $dom->getElementsByTagName('CodigoErrorRegistro')->item(0);
@@ -377,10 +384,21 @@ class AeatClient
                 ];
             }
             
-            // Level 3: Check EstadoRegistro (invoice registration status)
-            // CRITICAL: Even with EstadoEnvio="Correcto", registration can fail
             $estadoRegistro = $dom->getElementsByTagName('EstadoRegistro')->item(0);
-            if (!$estadoRegistro || $estadoRegistro->nodeValue !== 'Correcto') {
+            
+            if (!$estadoRegistro) {
+                return [
+                    'success' => false,
+                    'message' => 'EstadoRegistro not found in response',
+                    'codigo' => null,
+                    'csv' => null,
+                    'estado_registro' => null,
+                ];
+            }
+            
+            $estadoValue = $estadoRegistro->nodeValue;
+            
+            if ($estadoValue === 'Incorrecto') {
                 $descripcionError = $dom->getElementsByTagName('DescripcionErrorRegistro')->item(0);
                 $codigoError = $dom->getElementsByTagName('CodigoErrorRegistro')->item(0);
                 
@@ -391,26 +409,51 @@ class AeatClient
                         : 'Invoice registration error (no description provided)',
                     'codigo' => $codigoError ? $codigoError->nodeValue : null,
                     'csv' => null,
+                    'estado_registro' => 'Incorrecto',
                 ];
             }
             
-            // All validations passed: Extract CSV
+            if (!in_array($estadoValue, ['Correcto', 'AceptadoConErrores'])) {
+                return [
+                    'success' => false,
+                    'message' => "Unknown AEAT estado_registro value: {$estadoValue}. Please update the system.",
+                    'codigo' => null,
+                    'csv' => null,
+                    'estado_registro' => $estadoValue,
+                ];
+            }
+            
             $csv = $dom->getElementsByTagName('CSV')->item(0);
             $csvValue = $csv ? $csv->nodeValue : null;
             
-            // Final check: CSV should exist for successful submissions
             if (!$csvValue) {
                 return [
                     'success' => false,
                     'message' => 'Invoice accepted but CSV not found in response',
                     'codigo' => null,
                     'csv' => null,
+                    'estado_registro' => $estadoValue,
+                ];
+            }
+            
+            $warnings = null;
+            if ($estadoValue === 'AceptadoConErrores') {
+                $descripcionError = $dom->getElementsByTagName('DescripcionErrorRegistro')->item(0);
+                $codigoError = $dom->getElementsByTagName('CodigoErrorRegistro')->item(0);
+                
+                $warnings = [
+                    'codigo' => $codigoError ? $codigoError->nodeValue : null,
+                    'descripcion' => $descripcionError ? $descripcionError->nodeValue : null,
                 ];
             }
             
             return [
                 'success' => true,
-                'message' => 'Invoice accepted by AEAT',
+                'message' => $estadoValue === 'Correcto' 
+                    ? 'Invoice accepted by AEAT' 
+                    : 'Invoice accepted by AEAT with warnings',
+                'estado_registro' => $estadoValue,
+                'warnings' => $warnings,
                 'codigo' => null,
                 'csv' => $csvValue,
             ];
@@ -425,9 +468,6 @@ class AeatClient
         }
     }
     
-    /**
-     * Extract SOAP Fault error message.
-     */
     private function extractSoapFaultMessage(string $soapResponse): string
     {
         try {
@@ -440,9 +480,6 @@ class AeatClient
         }
     }
     
-    /**
-     * Parse successful SOAP response.
-     */
     private function parseSoapResponse(string $soapResponse): array
     {
         try {
