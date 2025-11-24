@@ -18,23 +18,27 @@ class HashHelper
     ];
 
     /**
-     * Generates the hash for an invoice record.
+     * Generates the hash for an invoice record according to AEAT specifications.
+     * 
+     * CRITICAL: Field names MUST match the official AEAT XML field names as per
+     * "Detalle de las especificaciones técnicas para generación de la huella o hash
+     * de los registros de facturación" v0.1.2 (27/08/2024), page 6.
      *
-     * @param array $data Invoice record data in the correct order.
+     * @param array $data Invoice record data with snake_case keys (for compatibility).
      * @return array ['hash' => string, 'inputString' => string]
      */
     public static function generateInvoiceHash(array $data): array
     {
-        self::validateData(self::$invoiceRequiredFields, $data);
-        $inputString = self::field('issuer_tax_id', $data['issuer_tax_id']);
-        $inputString .= self::field('invoice_number', $data['invoice_number']);
-        $inputString .= self::field('issue_date', $data['issue_date']);
-        $inputString .= self::field('invoice_type', $data['invoice_type']);
-        $inputString .= self::field('total_tax', $data['total_tax']);
-        $inputString .= self::field('total_amount', $data['total_amount']);
-        $inputString .= self::field('previous_hash', $data['previous_hash']);
-        $inputString .= self::field('generated_at', $data['generated_at'], false);
-        $hash = strtoupper(hash('sha256', $inputString, false));
+        self::validateData(self::$invoiceRequiredFields, $data);                
+        $inputString = self::field('IDEmisorFactura', $data['issuer_tax_id']);
+        $inputString .= self::field('NumSerieFactura', $data['invoice_number']);
+        $inputString .= self::field('FechaExpedicionFactura', $data['issue_date']);
+        $inputString .= self::field('TipoFactura', $data['invoice_type']);
+        $inputString .= self::field('CuotaTotal', $data['total_tax']);
+        $inputString .= self::field('ImporteTotal', $data['total_amount']);
+        $inputString .= self::field('Huella', $data['previous_hash']);
+        $inputString .= self::field('FechaHoraHusoGenRegistro', $data['generated_at'], false);                
+        $hash = strtoupper(hash('sha256', $inputString, false));        
         return ['hash' => $hash, 'inputString' => $inputString];
     }
 
