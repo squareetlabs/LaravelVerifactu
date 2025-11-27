@@ -259,7 +259,7 @@ class AeatClient
                 'NombreRazon' => $issuerName,
                 'NIF' => $issuerVat,
                 'NombreSistemaInformatico' => env('APP_NAME', 'LaravelVerifactu'),
-                'IdSistemaInformatico' => '01',
+                'IdSistemaInformatico' => config('verifactu.system_id', '01'),
                 'Version' => '1.0',
                 'NumeroInstalacion' => '001',
                 'TipoUsoPosibleSoloVerifactu' => 'S',

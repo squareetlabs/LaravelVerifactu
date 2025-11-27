@@ -2,6 +2,7 @@
 
 return [
     'enabled' => true,
+    'system_id' => env('VERIFACTU_SYSTEM_ID', '01'),
     'default_currency' => 'EUR',
     'issuer' => [
         'name' => env('VERIFACTU_ISSUER_NAME', ''),
