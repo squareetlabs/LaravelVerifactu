@@ -25,7 +25,9 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="VERIFACTU_ISSUER_NAME" value="Test Company"/>
         <env name="VERIFACTU_ISSUER_VAT" value="B12345678"/>
-        <env name="VERIFACTU_CERT_BASE64" value=""/>
+        <env name="VERIFACTU_CERT_S3_DISK" value=""/>
+        <env name="VERIFACTU_CERT_S3_PATH" value=""/>
+        <env name="VERIFACTU_CERT_PASSWORD" value=""/>
         <env name="VERIFACTU_PRODUCTION" value="false"/>
     </php>
     <source>
