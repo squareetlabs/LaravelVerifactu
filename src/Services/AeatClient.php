@@ -188,13 +188,14 @@ class AeatClient
                 $xmlBody
             );
             
-            // Send with Laravel HTTP Client
+            // Send with Laravel HTTP Client            
             $response = Http::withOptions([
                 'cert' => [$this->certPath, $this->certPassword],
                 'verify' => true,
             ])
+            ->connectTimeout(10)
             ->timeout(30)
-            ->retry(3, 100, throw: false)
+            ->retry(2, 500, throw: false)
             ->withHeaders([
                 'Content-Type' => 'text/xml; charset=utf-8',
                 'SOAPAction' => '""',
