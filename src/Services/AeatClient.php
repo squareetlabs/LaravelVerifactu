@@ -9,6 +9,31 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 
+/**
+ * Cliente SOAP para comunicación con AEAT Verifactu.
+ * 
+ * IMPORTANTE - ORDEN DE ELEMENTOS XML (XSD AEAT):
+ * ================================================
+ * El XSD de AEAT es MUY ESTRICTO con el orden de los elementos.
+ * Si el orden no es correcto, AEAT devuelve error 4102:
+ * "El XML no cumple el esquema. Falta informar campo obligatorio.: DetalleDesglose"
+ * 
+ * Orden correcto de DetalleDesglose según XSD:
+ *   1. Impuesto (01=IVA, 02=IPSI, 03=IGIC)
+ *   2. ClaveRegimen (01=General, 02=Exportación, etc.)
+ *   3. CalificacionOperacion (S1, S2, N1, N2, E1-E6)
+ *   4. OperacionExenta (solo si E1-E6)
+ *   5. TipoImpositivo (SOLO para S1/S2, NO para N1/N2/E1-E6)
+ *   6. BaseImponibleOimporteNoSujeto
+ *   7. CuotaRepercutida (SOLO para S1/S2, NO para N1/N2/E1-E6)
+ *   8. TipoRecargoEquivalencia (opcional)
+ *   9. CuotaRecargoEquivalencia (opcional)
+ * 
+ * Issue resuelta 2025-11-30: El orden incorrecto (BaseImponible antes de TipoImpositivo)
+ * causaba rechazo de AEAT aunque el XML parecía correcto visualmente.
+ * 
+ * @see https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd
+ */
 class AeatClient
 {
     private string $certPath;
@@ -66,28 +91,31 @@ class AeatClient
             ];
         }
 
-        // 5. Map tax breakdowns
-        // IMPORTANTE: Para operaciones exentas (E1-E6) y no sujetas (N1, N2),
-        // la AEAT NO permite informar TipoImpositivo ni CuotaRepercutida
+        // 5. Map tax breakdowns (ver documentación de clase para orden XSD)
         $detallesDesglose = [];
         foreach ($invoice->breakdowns as $breakdown) {
             $operationTypeValue = $breakdown->operation_type->value ?? $breakdown->operation_type ?? 'S1';
             $isExemptOrNotSubject = in_array($operationTypeValue, ['N1', 'N2', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6']);
             
-            $desglose = [
-                'Impuesto' => $breakdown->tax_type->value ?? $breakdown->tax_type ?? '01',
-                'ClaveRegimen' => $breakdown->regime_type->value ?? $breakdown->regime_type ?? '01',
-                'CalificacionOperacion' => $operationTypeValue,
-                'BaseImponibleOimporteNoSujeto' => $breakdown->base_amount,
-            ];
-            
-            // Solo incluir TipoImpositivo y CuotaRepercutida para operaciones sujetas no exentas (S1, S2)
-            if (!$isExemptOrNotSubject) {
-                $desglose['TipoImpositivo'] = $breakdown->tax_rate;
-                $desglose['CuotaRepercutida'] = $breakdown->tax_amount;
+            if ($isExemptOrNotSubject) {
+                // N1/N2 (no sujetas) y E1-E6 (exentas): SIN TipoImpositivo ni CuotaRepercutida
+                $detallesDesglose[] = [
+                    'Impuesto' => $breakdown->tax_type->value ?? $breakdown->tax_type ?? '01',
+                    'ClaveRegimen' => $breakdown->regime_type->value ?? $breakdown->regime_type ?? '01',
+                    'CalificacionOperacion' => $operationTypeValue,
+                    'BaseImponibleOimporteNoSujeto' => $breakdown->base_amount,
+                ];
+            } else {
+                // S1/S2 (sujetas): CON TipoImpositivo y CuotaRepercutida (orden XSD crítico)
+                $detallesDesglose[] = [
+                    'Impuesto' => $breakdown->tax_type->value ?? $breakdown->tax_type ?? '01',
+                    'ClaveRegimen' => $breakdown->regime_type->value ?? $breakdown->regime_type ?? '01',
+                    'CalificacionOperacion' => $operationTypeValue,
+                    'TipoImpositivo' => $breakdown->tax_rate,
+                    'BaseImponibleOimporteNoSujeto' => $breakdown->base_amount,
+                    'CuotaRepercutida' => $breakdown->tax_amount,
+                ];
             }
-            
-            $detallesDesglose[] = $desglose;
         }
 
         // 6. Generate invoice hash
@@ -181,10 +209,8 @@ class AeatClient
             ],
         ];
 
-        // 8. Convert array to XML
+        // 8. Convert array to XML and send to AEAT
         $xml = $this->buildAeatXml($body);
-
-        // Envío SOAP a AEAT
         $location = $this->production
             ? 'https://www1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP'
             : 'https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP';
@@ -199,7 +225,6 @@ class AeatClient
                 $xmlBody
             );
             
-            // Send with Laravel HTTP Client            
             $response = Http::withOptions([
                 'cert' => [$this->certPath, $this->certPassword],
                 'verify' => true,
@@ -328,7 +353,7 @@ class AeatClient
                     $parent->appendChild($element);
                 }
             } else {
-                $element = $namespace 
+                $element = $namespace
                     ? $dom->createElementNS($namespace, $key, htmlspecialchars((string)$value))
                     : $dom->createElement($key, htmlspecialchars((string)$value));
                 $parent->appendChild($element);
