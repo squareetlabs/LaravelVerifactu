@@ -87,12 +87,38 @@ class AeatClient
         ];
 
         // 4. Map recipients
+        // IMPORTANTE: Para destinatarios extranjeros (no ES) se usa IDOtro en lugar de NIF
         $destinatarios = [];
         foreach ($invoice->recipients as $recipient) {
-            $destinatarios[] = [
-                'NombreRazon' => $recipient->name,
-                'NIF' => $recipient->tax_id,
-            ];
+            $country = $recipient->country ?? 'ES';
+            
+            if ($country === 'ES') {
+                // Destinatario español: usar NIF
+                $destinatarios[] = [
+                    'NombreRazon' => $recipient->name,
+                    'NIF' => $recipient->tax_id,
+                ];
+            } else {
+                // Destinatario extranjero: usar IDOtro
+                // El tax_id puede venir con prefijo de país (DE999999999) o sin él
+                $taxId = $recipient->tax_id;
+                // Quitar prefijo del país si existe
+                if (strlen($taxId) > 2 && strtoupper(substr($taxId, 0, 2)) === strtoupper($country)) {
+                    $taxId = substr($taxId, 2);
+                }
+                
+                // IDType: 02=NIF-IVA, 03=Pasaporte, 04=Doc. oficial, 05=Certificado residencia, 06=Otro, 07=No censado
+                $idType = $recipient->id_type ?? '02';
+                
+                $destinatarios[] = [
+                    'NombreRazon' => $recipient->name,
+                    'IDOtro' => [
+                        'CodigoPais' => $country,
+                        'IDType' => $idType,
+                        'ID' => $taxId,
+                    ],
+                ];
+            }
         }
 
         // 5. Map tax breakdowns (ver documentación de clase para orden XSD)
