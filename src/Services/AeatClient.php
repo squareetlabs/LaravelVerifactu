@@ -201,10 +201,16 @@ class AeatClient
             ...($invoice->rectified_invoices && !empty($invoice->rectified_invoices) ? [
                 'FacturasRectificadas' => [
                     'IDFacturaRectificada' => array_map(function($rectified) {
+                        // Convertir fecha a formato AEAT (d-m-Y)
+                        $date = $rectified['date'] ?? $rectified['FechaExpedicionFactura'] ?? null;
+                        if ($date && !preg_match('/^\d{2}-\d{2}-\d{4}$/', $date)) {
+                            // Si viene en formato Y-m-d, convertir a d-m-Y
+                            $date = date('d-m-Y', strtotime($date));
+                        }
                         return [
                             'IDEmisorFactura' => $rectified['issuer_tax_id'] ?? $rectified['IDEmisorFactura'],
                             'NumSerieFactura' => $rectified['number'] ?? $rectified['NumSerieFactura'],
-                            'FechaExpedicionFactura' => $rectified['date'] ?? $rectified['FechaExpedicionFactura'],
+                            'FechaExpedicionFactura' => $date,
                         ];
                     }, $invoice->rectified_invoices)
                 ]
