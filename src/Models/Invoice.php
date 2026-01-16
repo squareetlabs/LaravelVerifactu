@@ -181,7 +181,11 @@ class Invoice extends Model implements VeriFactuInvoice
 
     public function getCorrectionType(): ?string
     {
-        return $this->correction_type;
+        if (!empty($this->correction_type)) {
+            return $this->correction_type;
+        }
+
+        return $this->rectificative_type ?: null;
     }
 
     public function getExternalReference(): ?string

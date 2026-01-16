@@ -308,8 +308,6 @@ $invoice = Invoice::create([
 
 ### Factura rectificativa (R1)
 ```php
-use Squareetlabs\VeriFactu\Enums\RectificativeType;
-
 $invoice = Invoice::create([
     'number' => 'INV-RECT-001',
     'date' => '2024-07-01',
@@ -322,8 +320,22 @@ $invoice = Invoice::create([
     'total' => 145.20,
     'type' => InvoiceType::RECTIFICATIVE_R1,
     'rectificative_type' => 'S', // S=Sustitución, I=Diferencia
-    'rectified_invoices' => json_encode(['INV-001', 'INV-002']),
-    'rectification_amount' => json_encode(['base' => -50.00, 'tax' => -10.50, 'total' => -60.50]),
+    'rectified_invoices' => [                      // Facturas sustituidas/rectificadas (issuer_tax_id, number, date)
+        [
+            'issuer_tax_id' => 'B87654321',
+            'number' => 'INV-001',
+            'date' => '2024-06-01',
+        ],
+        [
+            'issuer_tax_id' => 'B87654321',
+            'number' => 'INV-002',
+            'date' => '2024-06-15',
+        ],
+    ],
+    'rectification_amount' => [                   // Obligatorio cuando rectificative_type = 'S'
+        'base' => 100.00,                          // Base de la factura sustituida
+        'tax' => 21.00,                            // Cuota de la factura sustituida
+    ],
 ]);
 ```
 
@@ -416,14 +428,21 @@ $invoice = Invoice::create([
     'number' => 'INV-RECT-001',
     'type' => InvoiceType::RECTIFICATIVE_R1,
     'rectificative_type' => 'I',                    // 'S' = Sustitución, 'I' = Diferencia
-    'rectified_invoices' => [                       // Array de facturas rectificadas
-        'INV-001',
-        'INV-002'
+    'rectified_invoices' => [                       // Array de facturas rectificadas (issuer_tax_id, number, date)
+        [
+            'issuer_tax_id' => 'B12345678',
+            'number' => 'INV-001',
+            'date' => '2024-07-01',                 // Se normaliza a d-m-Y al enviar
+        ],
+        [
+            'issuer_tax_id' => 'B12345678',
+            'number' => 'INV-002',
+            'date' => '2024-07-02',
+        ],
     ],
-    'rectification_amount' => [                     // Importes de rectificación
+    'rectification_amount' => [                     // Obligatorio en 'S', opcional en 'I'
         'base' => -50.00,
         'tax' => -10.50,
-        'total' => -60.50
     ],
     // ... otros campos
 ]);
@@ -517,8 +536,8 @@ $invoice = Invoice::create([
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `rectificative_type` | string\|null | 'S' = Sustitución, 'I' = Diferencia |
-| `rectified_invoices` | array | Array de números de facturas rectificadas |
-| `rectification_amount` | array | Importes de rectificación (base, tax, total) |
+| `rectified_invoices` | array | Array de facturas rectificadas/sustituidas (issuer_tax_id, number, date) |
+| `rectification_amount` | array | Importes de rectificación (base, tax, surcharge). Obligatorio en 'S' |
 
 #### Campos de subsanación
 | Campo | Tipo | Descripción |
@@ -615,11 +634,16 @@ $rectificativeInvoice = Invoice::create([
     'date' => '2024-07-15',
     'type' => InvoiceType::RECTIFICATIVE_R1,
     'rectificative_type' => 'I',                   // I = Diferencia
-    'rectified_invoices' => ['INV-001'],          // Facturas rectificadas
+    'rectified_invoices' => [
+        [
+            'issuer_tax_id' => $originalInvoice->issuer_tax_id,
+            'number' => $originalInvoice->number,
+            'date' => $originalInvoice->date->format('d-m-Y'),
+        ],
+    ],
     'rectification_amount' => [
         'base' => -20.00,                          // Diferencia en base
         'tax' => -4.20,                            // Diferencia en impuesto
-        'total' => -24.20                          // Diferencia total
     ],
     'amount' => -20.00,                            // Importe negativo
     'tax' => -4.20,

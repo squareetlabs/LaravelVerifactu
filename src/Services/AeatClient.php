@@ -285,8 +285,23 @@ class AeatClient
             ];
         }
 
-        if ($invoice->getCorrectionType()) {
-            $registroAlta['TipoRectificativa'] = $invoice->getCorrectionType();
+        $rectificativeType = $invoice->getCorrectionType();
+        if ($rectificativeType) {
+            $rectificativeType = strtoupper($rectificativeType);
+            $registroAlta['TipoRectificativa'] = $rectificativeType;
+        }
+
+        $rectifiedInvoices = $this->resolveRectifiedInvoices($invoice, $issuerVat);
+        if ($rectifiedInvoices) {
+            $isSubstitute = strtoupper($tipoFactura) === 'F3';
+            $block = $isSubstitute ? 'FacturasSustituidas' : 'FacturasRectificadas';
+            $itemKey = $isSubstitute ? 'IDFacturaSustituida' : 'IDFacturaRectificada';
+            $registroAlta[$block] = [$itemKey => $rectifiedInvoices];
+        }
+
+        $rectificationAmount = $this->resolveRectificationAmount($invoice);
+        if ($rectificationAmount) {
+            $registroAlta['ImporteRectificacion'] = $rectificationAmount;
         }
 
         if ($invoice->getExternalReference()) {
@@ -298,6 +313,154 @@ class AeatClient
         }
 
         return $registroAlta;
+    }
+
+    private function resolveRectifiedInvoices(VeriFactuInvoice $invoice, string $issuerVat): ?array
+    {
+        $rectified = null;
+
+        if (method_exists($invoice, 'getRectifiedInvoices')) {
+            $rectified = $invoice->getRectifiedInvoices();
+        }
+
+        if ($rectified === null && $invoice instanceof \Illuminate\Database\Eloquent\Model) {
+            $rectified = $invoice->getAttribute('rectified_invoices');
+        }
+
+        if (is_string($rectified)) {
+            $decoded = json_decode($rectified, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $rectified = $decoded;
+            }
+        }
+
+        if (!is_array($rectified) || $rectified === []) {
+            return null;
+        }
+
+        if (array_key_exists('number', $rectified) && array_key_exists('date', $rectified)) {
+            $rectified = [$rectified];
+        }
+
+        $items = [];
+        foreach ($rectified as $item) {
+            $normalized = $this->normalizeRectifiedInvoice($item, $issuerVat);
+            if ($normalized) {
+                $items[] = $normalized;
+            }
+        }
+
+        return $items === [] ? null : $items;
+    }
+
+    private function normalizeRectifiedInvoice(mixed $item, string $issuerVat): ?array
+    {
+        if ($item instanceof \Illuminate\Database\Eloquent\Model) {
+            $item = $item->getAttributes();
+        }
+
+        if (!is_array($item)) {
+            return null;
+        }
+
+        $number = $item['number'] ?? null;
+        $date = $item['date'] ?? null;
+        $issuer = $item['issuer_tax_id'] ?? $item['issuer_vat'] ?? $issuerVat;
+
+        if (empty($number) || empty($date)) {
+            return null;
+        }
+
+        $date = $this->normalizeIssueDate($date);
+
+        if ($date === null) {
+            return null;
+        }
+
+        return [
+            'IDEmisorFactura' => $issuer,
+            'NumSerieFactura' => (string) $number,
+            'FechaExpedicionFactura' => $date,
+        ];
+    }
+
+    private function normalizeIssueDate(mixed $date): ?string
+    {
+        if ($date instanceof \DateTimeInterface) {
+            return $date->format('d-m-Y');
+        }
+
+        if (!is_string($date)) {
+            return null;
+        }
+
+        $date = trim($date);
+        if ($date === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1) {
+            $parsed = \Carbon\Carbon::createFromFormat('Y-m-d', $date);
+            return $parsed->format('d-m-Y');
+        }
+
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $date) === 1) {
+            $parsed = \Carbon\Carbon::createFromFormat('d/m/Y', $date);
+            return $parsed->format('d-m-Y');
+        }
+
+        if (preg_match('/^\d{2}-\d{2}-\d{4}$/', $date) === 1) {
+            return $date;
+        }
+
+        try {
+            return \Carbon\Carbon::parse($date)->format('d-m-Y');
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    private function resolveRectificationAmount(VeriFactuInvoice $invoice): ?array
+    {
+        $amount = null;
+
+        if (method_exists($invoice, 'getRectificationAmount')) {
+            $amount = $invoice->getRectificationAmount();
+        }
+
+        if ($amount === null && $invoice instanceof \Illuminate\Database\Eloquent\Model) {
+            $amount = $invoice->getAttribute('rectification_amount');
+        }
+
+        if (is_string($amount)) {
+            $decoded = json_decode($amount, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $amount = $decoded;
+            }
+        }
+
+        if (!is_array($amount) || $amount === []) {
+            return null;
+        }
+
+        $base = $amount['base'] ?? null;
+        $tax = $amount['tax'] ?? null;
+        $surcharge = $amount['surcharge'] ?? $amount['recargo'] ?? null;
+
+        if ($base === null || $tax === null) {
+            return null;
+        }
+
+        $rectification = [
+            'BaseRectificada' => sprintf('%.2f', (float) $base),
+            'CuotaRectificada' => sprintf('%.2f', (float) $tax),
+        ];
+
+        if ($surcharge !== null) {
+            $rectification['CuotaRecargoRectificado'] = sprintf('%.2f', (float) $surcharge);
+        }
+
+        return $rectification;
     }
 
     protected function getSoapClient(): \SoapClient
@@ -371,4 +534,3 @@ class AeatClient
         }
     }
 }
-
