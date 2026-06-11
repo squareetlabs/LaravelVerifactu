@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Tests\TestCase;
-use Squareetlabs\VeriFactu\Services\AeatClient;
-use Squareetlabs\VeriFactu\Contracts\VeriFactuInvoice;
-use Squareetlabs\VeriFactu\Enums\InvoiceType;
+use Tests\Support\InteractsWithAeatClient;
 use Illuminate\Support\Facades\Config;
 
 /**
@@ -20,6 +18,8 @@ use Illuminate\Support\Facades\Config;
  */
 class AeatClientHostChainTest extends TestCase
 {
+    use InteractsWithAeatClient;
+
     private const PRECOMPUTED_HASH = 'ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789';
     private const GENERATED_AT = '2026-06-10T10:00:00+00:00';
 
@@ -27,25 +27,14 @@ class AeatClientHostChainTest extends TestCase
     {
         Config::set('verifactu.issuer', ['name' => 'Config Issuer', 'vat' => 'B00000000']);
 
-        $soapClientMock = $this->getMockBuilder(\SoapClient::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['__setLocation', '__soapCall', '__getLastRequest', '__getLastResponse'])
-            ->getMock();
+        $soapClientMock = $this->mockSoapExpecting(function ($args) {
+            $registroAlta = $args[0]['RegistroFactura'][0]['RegistroAlta'];
 
-        $soapClientMock->expects($this->once())
-            ->method('__soapCall')
-            ->with(
-                'RegFactuSistemaFacturacion',
-                $this->callback(function ($args) {
-                    $registroAlta = $args[0]['RegistroFactura'][0]['RegistroAlta'];
+            return $registroAlta['Huella'] === self::PRECOMPUTED_HASH
+                && $registroAlta['FechaHoraHusoGenRegistro'] === self::GENERATED_AT;
+        });
 
-                    return $registroAlta['Huella'] === self::PRECOMPUTED_HASH
-                        && $registroAlta['FechaHoraHusoGenRegistro'] === self::GENERATED_AT;
-                })
-            )
-            ->willReturn(new \stdClass());
-
-        $client = $this->makeClient($soapClientMock);
+        $client = $this->makeAeatClient($soapClientMock);
 
         $result = $client->sendInvoice($this->makeInvoiceMock(), null, [
             'hash' => self::PRECOMPUTED_HASH,
@@ -61,27 +50,16 @@ class AeatClientHostChainTest extends TestCase
     {
         Config::set('verifactu.issuer', ['name' => 'Config Issuer', 'vat' => 'B00000000']);
 
-        $soapClientMock = $this->getMockBuilder(\SoapClient::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['__setLocation', '__soapCall', '__getLastRequest', '__getLastResponse'])
-            ->getMock();
+        $soapClientMock = $this->mockSoapExpecting(function ($args) {
+            $body = $args[0];
+            $registroAlta = $body['RegistroFactura'][0]['RegistroAlta'];
 
-        $soapClientMock->expects($this->once())
-            ->method('__soapCall')
-            ->with(
-                'RegFactuSistemaFacturacion',
-                $this->callback(function ($args) {
-                    $body = $args[0];
-                    $registroAlta = $body['RegistroFactura'][0]['RegistroAlta'];
+            return $body['Cabecera']['ObligadoEmision']['NIF'] === 'B11111111'
+                && $body['Cabecera']['ObligadoEmision']['NombreRazon'] === 'Tenant Company SL'
+                && $registroAlta['IDFactura']['IDEmisorFactura'] === 'B11111111';
+        });
 
-                    return $body['Cabecera']['ObligadoEmision']['NIF'] === 'B11111111'
-                        && $body['Cabecera']['ObligadoEmision']['NombreRazon'] === 'Tenant Company SL'
-                        && $registroAlta['IDFactura']['IDEmisorFactura'] === 'B11111111';
-                })
-            )
-            ->willReturn(new \stdClass());
-
-        $client = $this->makeClient($soapClientMock, [
+        $client = $this->makeAeatClient($soapClientMock, issuer: [
             'name' => 'Tenant Company SL',
             'vat' => 'B11111111',
         ]);
@@ -89,43 +67,5 @@ class AeatClientHostChainTest extends TestCase
         $result = $client->sendInvoice($this->makeInvoiceMock());
 
         $this->assertEquals('success', $result['status']);
-    }
-
-    private function makeClient(\SoapClient $soapClientMock, ?array $issuer = null): AeatClient
-    {
-        return new class ('/path/to/cert.pem', 'password', false, true, $issuer, $soapClientMock) extends AeatClient {
-            private $soapClientMock;
-
-            public function __construct($certPath, $certPassword, $production, $verifactuMode, $issuer, $soapClientMock)
-            {
-                parent::__construct($certPath, $certPassword, $production, $verifactuMode, $issuer);
-                $this->soapClientMock = $soapClientMock;
-            }
-
-            protected function getSoapClient(): \SoapClient
-            {
-                return $this->soapClientMock;
-            }
-        };
-    }
-
-    private function makeInvoiceMock(): VeriFactuInvoice
-    {
-        $invoiceMock = $this->createMock(VeriFactuInvoice::class);
-        $invoiceMock->method('getInvoiceNumber')->willReturn('FAC-2026-000001');
-        $invoiceMock->method('getIssueDate')->willReturn(now());
-        $invoiceMock->method('getInvoiceType')->willReturn(InvoiceType::STANDARD->value);
-        $invoiceMock->method('getTotalAmount')->willReturn(121.0);
-        $invoiceMock->method('getTaxAmount')->willReturn(21.0);
-        $invoiceMock->method('getBreakdowns')->willReturn(collect());
-        $invoiceMock->method('getRecipients')->willReturn(collect());
-        $invoiceMock->method('getPreviousHash')->willReturn(null);
-        $invoiceMock->method('getOperationDescription')->willReturn('Venta');
-        $invoiceMock->method('getOperationDate')->willReturn(null);
-        $invoiceMock->method('getTaxPeriod')->willReturn(null);
-        $invoiceMock->method('getCorrectionType')->willReturn(null);
-        $invoiceMock->method('getExternalReference')->willReturn(null);
-
-        return $invoiceMock;
     }
 }
