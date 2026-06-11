@@ -98,6 +98,60 @@ El paquete ajustará automáticamente las URLs del servicio SOAP según el modo 
 - **Pruebas VERIFACTU**: `https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP`
 - **Pruebas NO VERIFACTU**: `https://prewww1.aeat.es/wlpl/TIKE-CONT/ws/SistemaFacturacion/RequerimientoSOAP`
 
+### Colaborador social (entidad colaboradora AEAT)
+
+Si tu plataforma está registrada como **entidad colaboradora** de la AEAT, puedes
+remitir registros en nombre de tus clientes usando **el certificado de la
+plataforma**: los obligados de emisión (autónomos, pymes…) no necesitan aportar
+su propio certificado digital.
+
+```env
+# Identidad del colaborador social (añade el bloque Representante a la Cabecera)
+VERIFACTU_REP_NAME="Mi Plataforma SL"
+VERIFACTU_REP_VAT=B99999999
+
+# El certificado configurado debe ser el del COLABORADOR, no el del emisor
+VERIFACTU_CERT_PATH=/ruta/certificado-plataforma.pem
+```
+
+En aplicaciones multi-tenant, usa `AeatClientFactory` (resuelve el certificado
+vía el contrato `CertificateProvider`, por defecto desde config):
+
+```php
+use Squareetlabs\VeriFactu\Services\AeatClientFactory;
+use Squareetlabs\VeriFactu\Services\AeatSubmissionResponse;
+
+$client = app(AeatClientFactory::class)->make(
+    issuer: ['name' => $company->legal_name, 'vat' => $company->tax_id],
+    representative: config('verifactu.representative'),
+);
+
+// Huella y timestamp precalculados de tu propia cadena (ver $record):
+$result = $client->sendInvoice($invoice, $previous, [
+    'hash' => $record->hash,
+    'generated_at' => $record->generated_at,
+]);
+
+// Respuesta tipada: EstadoEnvio, CSV y errores por línea ya parseados
+$response = AeatSubmissionResponse::fromClientResult($result);
+
+if ($response->accepted()) {
+    // EstadoEnvio = Correcto; $response->csv disponible
+} else {
+    Log::warning('AEAT rechazo', ['error' => $response->firstError()]);
+}
+```
+
+Si tu aplicación guarda los certificados en otro sitio (por emisor, cifrados,
+Vault, S3+KMS...), implementa el contrato y re-vincúlalo:
+
+```php
+$this->app->bind(
+    \Squareetlabs\VeriFactu\Contracts\CertificateProvider::class,
+    \App\Services\MyCertificateStore::class,
+);
+```
+
 ### Parámetros del Sistema Informático
 
 Configura los parámetros según las características de tu sistema:
