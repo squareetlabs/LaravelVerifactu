@@ -7,6 +7,7 @@ namespace Squareetlabs\VeriFactu\Services;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Squareetlabs\VeriFactu\Contracts\VeriFactuInvoice;
+use Squareetlabs\VeriFactu\Helpers\HashHelper;
 use Squareetlabs\VeriFactu\Models\Invoice;
 use Illuminate\Support\Facades\Log;
 
@@ -19,12 +20,41 @@ class AeatClient
     private bool $production;
     private bool $verifactuMode;
 
-    public function __construct(string $certPath, ?string $certPassword = null, bool $production = false, ?bool $verifactuMode = null)
-    {
+    /** @var array{name: string, vat: string} */
+    private array $issuer;
+
+    /** @var array{name: string, vat: string}|null */
+    private ?array $representative;
+
+    /**
+     * @param array{name: string, vat: string}|null $issuer Issuer (obligado emisión).
+     *        Defaults to config('verifactu.issuer'). Pass it explicitly in
+     *        multi-tenant applications where each company is a different issuer.
+     * @param array{name: string, vat: string}|null $representative Social
+     *        collaborator / representative (colaborador social AEAT). When set,
+     *        a Representante block is added to the Cabecera and the TLS client
+     *        certificate is expected to be the COLLABORATOR's, not the issuer's:
+     *        the platform submits on behalf of its clients, who never have to
+     *        provide their own certificate. Defaults to
+     *        config('verifactu.representative') when it has a non-empty vat.
+     */
+    public function __construct(
+        string $certPath,
+        ?string $certPassword = null,
+        bool $production = false,
+        ?bool $verifactuMode = null,
+        ?array $issuer = null,
+        ?array $representative = null
+    ) {
         $this->certPath = $certPath;
         $this->certPassword = $certPassword;
         $this->production = $production;
         $this->verifactuMode = $verifactuMode ?? config('verifactu.verifactu_mode', true);
+        $this->issuer = $issuer ?? (array) config('verifactu.issuer', ['name' => '', 'vat' => '']);
+
+        $configRepresentative = (array) config('verifactu.representative', []);
+        $this->representative = $representative
+            ?? (!empty($configRepresentative['vat']) ? $configRepresentative : null);
         $this->baseUri = $production
             ? 'https://www1.aeat.es'
             : 'https://prewww1.aeat.es';
@@ -37,10 +67,9 @@ class AeatClient
         ]);
     }
 
-
-
     /**
-     * Build fingerprint/hash for invoice chaining
+     * Build fingerprint/hash for invoice chaining.
+     * Delegates to HashHelper: single source of truth for the AEAT hash spec.
      *
      * @param string $issuerVat
      * @param string $numSerie
@@ -62,47 +91,39 @@ class AeatClient
         string $ts,
         string $prevHash = ''
     ): string {
-        $raw = 'IDEmisorFactura=' . $issuerVat
-            . '&NumSerieFactura=' . $numSerie
-            . '&FechaExpedicionFactura=' . $fechaExp
-            . '&TipoFactura=' . $tipoFactura
-            . '&CuotaTotal=' . $cuotaTotal
-            . '&ImporteTotal=' . $importeTotal
-            . '&Huella=' . $prevHash
-            . '&FechaHoraHusoGenRegistro=' . $ts;
-        return strtoupper(hash('sha256', $raw));
+        return HashHelper::generateInvoiceHash([
+            'issuer_tax_id' => $issuerVat,
+            'invoice_number' => $numSerie,
+            'issue_date' => $fechaExp,
+            'invoice_type' => $tipoFactura,
+            'total_tax' => $cuotaTotal,
+            'total_amount' => $importeTotal,
+            'previous_hash' => $prevHash,
+            'generated_at' => $ts,
+        ])['hash'];
     }
 
     /**
      * Send invoice registration to AEAT with support for invoice chaining
      *
-     * @param Invoice $invoice
-     * @param array|null $previous Previous invoice data for chaining (hash, number, date)
-     * @return array
-     */
-    /**
-     * Send invoice registration to AEAT with support for invoice chaining
-     *
      * @param VeriFactuInvoice $invoice
      * @param array|null $previous Previous invoice data for chaining (hash, number, date)
+     * @param array|null $record Precomputed registration record data:
+     *        ['hash' => string, 'generated_at' => string (ISO 8601)].
+     *        REQUIRED when the host application persists its own hash chain at
+     *        issuance time: the submitted Huella and FechaHoraHusoGenRegistro
+     *        must be exactly the ones stored in the chain, never recomputed at
+     *        submission time (async submission would break chain integrity).
      * @return array
      */
-    /**
-     * Send invoice registration to AEAT with support for invoice chaining
-     *
-     * @param VeriFactuInvoice $invoice
-     * @param array|null $previous Previous invoice data for chaining (hash, number, date)
-     * @return array
-     */
-    public function sendInvoice(VeriFactuInvoice $invoice, ?array $previous = null): array
+    public function sendInvoice(VeriFactuInvoice $invoice, ?array $previous = null, ?array $record = null): array
     {
-        // 1. Obtener datos del emisor
-        $issuer = config('verifactu.issuer');
-        $issuerName = $issuer['name'] ?? '';
-        $issuerVat = $issuer['vat'] ?? '';
+        // 1. Obtener datos del emisor (por instancia; multi-tenant friendly)
+        $issuerName = $this->issuer['name'] ?? '';
+        $issuerVat = $this->issuer['vat'] ?? '';
 
         // 2. Preparar datos comunes
-        $ts = \Carbon\Carbon::now('UTC')->format('c');
+        $ts = $record['generated_at'] ?? \Carbon\Carbon::now('UTC')->format('c');
         $numSerie = (string) $invoice->getInvoiceNumber();
         $fechaExp = $invoice->getIssueDate()->format('d-m-Y');
         $tipoFactura = $invoice->getInvoiceType();
@@ -110,8 +131,8 @@ class AeatClient
         $importeTotal = sprintf('%.2f', (float) $invoice->getTotalAmount());
         $prevHash = $previous['hash'] ?? $invoice->getPreviousHash() ?? '';
 
-        // 3. Generar huella
-        $huella = $this->buildFingerprint(
+        // 3. Huella: la precalculada de la cadena del host si existe; si no, generarla
+        $huella = $record['hash'] ?? $this->buildFingerprint(
             $issuerVat,
             $numSerie,
             $fechaExp,
@@ -158,12 +179,23 @@ class AeatClient
 
     private function buildHeader(string $issuerName, string $issuerVat): array
     {
-        return [
+        $cabecera = [
             'ObligadoEmision' => [
                 'NombreRazon' => $issuerName,
                 'NIF' => $issuerVat,
             ],
         ];
+
+        // Colaborador social: la plataforma remite en nombre del obligado con
+        // su propio certificado; AEAT exige identificar al representante.
+        if ($this->representative !== null) {
+            $cabecera['Representante'] = [
+                'NombreRazon' => $this->representative['name'] ?? '',
+                'NIF' => $this->representative['vat'] ?? '',
+            ];
+        }
+
+        return $cabecera;
     }
 
     private function buildBreakdowns(VeriFactuInvoice $invoice): array

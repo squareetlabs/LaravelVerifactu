@@ -95,6 +95,18 @@ class ContractComplianceTest extends TestCase
             {
                 return null;
             }
+            public function getCorrectedBaseAmount(): ?float
+            {
+                return null;
+            }
+            public function getCorrectedTaxAmount(): ?float
+            {
+                return null;
+            }
+            public function getCorrectedSurchargeAmount(): ?float
+            {
+                return null;
+            }
         };
 
         $this->assertInstanceOf(VeriFactuInvoice::class, $customInvoice);

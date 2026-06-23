@@ -102,6 +102,18 @@ class AeatClientHybridTest extends TestCase
             {
                 return null;
             }
+            public function getCorrectedBaseAmount(): ?float
+            {
+                return null;
+            }
+            public function getCorrectedTaxAmount(): ?float
+            {
+                return null;
+            }
+            public function getCorrectedSurchargeAmount(): ?float
+            {
+                return null;
+            }
         };
 
         // Mock AeatClient to avoid real SOAP calls but verify method signature

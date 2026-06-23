@@ -11,6 +11,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Representative (Colaborador Social)
+    |--------------------------------------------------------------------------
+    |
+    | For platforms registered as "entidad colaboradora" (colaborador social)
+    | with AEAT: invoices are submitted on behalf of the issuer using the
+    | PLATFORM's certificate, so issuers never have to provide their own.
+    | When 'vat' is set, a Representante block is added to the Cabecera of
+    | every submission. The TLS certificate configured under 'aeat' must then
+    | be the collaborator's certificate.
+    |
+    */
+    'representative' => [
+        'name' => env('VERIFACTU_REP_NAME', ''),
+        'vat' => env('VERIFACTU_REP_VAT', ''),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Verifactu Mode
     |--------------------------------------------------------------------------
     |
